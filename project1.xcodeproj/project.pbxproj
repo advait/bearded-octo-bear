@@ -28,6 +28,7 @@
 		920A53FA1558892C00D2272D /* http-response.cc */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "http-response.cc"; sourceTree = "<group>"; };
 		920A53FB1558892C00D2272D /* http-response.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "http-response.h"; sourceTree = "<group>"; };
 		920A54011558895300D2272D /* http-get */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "compiled.mach-o.executable"; name = "http-get"; path = "/Users/advait/Google Drive/Dropbox/School Homework/UCLA/CS118/project1/build/Release/http-get"; sourceTree = "<absolute>"; };
+		920A540C1558930E00D2272D /* http-common.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "http-common.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -48,6 +49,7 @@
 				920A53F51558892C00D2272D /* http-headers.cc */,
 				920A53F61558892C00D2272D /* http-headers.h */,
 				920A53F71558892C00D2272D /* http-proxy.cc */,
+				920A540C1558930E00D2272D /* http-common.h */,
 				920A53F81558892C00D2272D /* http-request.cc */,
 				920A53F91558892C00D2272D /* http-request.h */,
 				920A53FA1558892C00D2272D /* http-response.cc */,
