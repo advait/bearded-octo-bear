@@ -3,6 +3,7 @@
  * CS118 - Event-based HTTP Proxy
  */
 
+#include <vector>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,8 +19,7 @@ using namespace std;
 #define LISTEN_BACKLOG 5
 
 // Gloabls
-void acceptConnection();
-int server_fd;
+void acceptConnection(int server_fd);
 
 
 /**
@@ -44,7 +44,7 @@ int setNonblocking(int fd) {
 
 int main (int argc, char *argv[]) {
   // Setup listening socket
-  server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (!server_fd) {
     error("Unable to create listening socket");
   }
@@ -64,12 +64,12 @@ int main (int argc, char *argv[]) {
   printf("Listening on port %d\n", LISTENING_PORT);
   
   // Setup polling on server socket
-  int nfds = 0;
+  vector<pollfd> poll_fds;
   struct pollfd server_poll_fd;
   server_poll_fd.fd = server_fd;
   server_poll_fd.events = 0 | POLLIN;  // Unblock when socket is readable
-  nfds++;
-  int rv = poll(&server_poll_fd, 1, 10000);
+  poll_fds.push_back(server_poll_fd);
+  int rv = poll((pollfd*)&poll_fds[0], poll_fds.size(), 10000);
   
   if (rv < 0) {
     error("Unable to poll on socket");
@@ -77,12 +77,15 @@ int main (int argc, char *argv[]) {
     error("Timeout ocurred");
   } else {
     printf("We can accept from server fd!\n");
-    acceptConnection();
+    acceptConnection(server_fd);
   }
   return 0;
 }
 
-void acceptConnection() {
+
+// Accepts a connection on server_fd, creates a new ProxyState object
+// for it, and adds the new client connection fd to our polling vector
+void acceptConnection(int server_fd) {
   // Accept connection
   sockaddr_in client_addr;
   int client_fd;
