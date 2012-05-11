@@ -103,7 +103,6 @@ int main (int argc, char *argv[]) {
   char* req_buf = (char*)malloc(req_len);
   if (!req_buf) error("Out of memory!");
   r.FormatRequest(req_buf);
-  printf("Request:\n%s\n", req_buf);
   
   // Lookup our host
   struct hostent *hp;
@@ -144,7 +143,6 @@ int main (int argc, char *argv[]) {
   char* out_buf = (char*)malloc(out_len);
   if (!out_buf) error("Out of memory!");
   while (true) {
-    printf("Reading!");
     int remaining = out_len - n_recv;
     int _temp = recv(client_fd, out_buf+n_recv, remaining, 0);
     n_recv += _temp;
@@ -164,16 +162,13 @@ int main (int argc, char *argv[]) {
     }
   }
   
-  printf("Response:\n\n%s\n\n", out_buf);
-  
-  
-  
-  
-  printf("URL: %s\n", argv[1]);
-  printf("Host: %s\n", host);
-  printf("Port: %d\n", port);
-  printf("Path: %s\n", path);
-  printf("Filename: %s\n", filename);
+  // Find HTTP data payload (minus headers)
+  char* payload = (char*)memmem(out_buf, out_len, "\r\n\r\n", 4);
+  if (!payload) {
+    error("Invalid HTTP Response");
+  }
+  payload += 4;
+  printf("%s\n", payload);
   
   // Free allocated strings
   free(host);

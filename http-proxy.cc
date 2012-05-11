@@ -249,6 +249,7 @@ public:
         return;
       }
       connect(m_upstream_fd, res->ai_addr, res->ai_addrlen);
+      // TODO: Free the thing from getaddrinfo
       
       // Map upstream socket fd to this ProxyState
       FDMap[m_upstream_fd] = this;
