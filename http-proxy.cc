@@ -57,6 +57,8 @@ public:
     this->m_client_in_size = 0;
     this->m_client_out = NULL;
     this->m_upstream_in = NULL;
+    this->m_upstream_in_read = 0;
+    this->m_upstream_in_size = 0;
     this->m_upstream_out = NULL;
     this->m_upstream_out_written = 0;
     this->m_upstream_out_size = 0;
@@ -183,12 +185,48 @@ public:
       m_state = STATE_UPSTREAM_READ;
     } else if (this->m_state == STATE_UPSTREAM_READ) {
       // Read from upstream socket
+      char* buf;
+      size_t buf_size = m_upstream_in_size == 0 ? BUFFER_SIZE : m_upstream_in_size * 2;
+      buf = (char*)malloc(buf_size);
+      if (!buf) error("Out of memory");
+      if (m_upstream_in_size > 0) {
+        // We've already began the read
+        memcpy(buf, m_upstream_in, m_upstream_in_size);
+        free(m_upstream_in);
+        m_client_in = NULL;
+      }
+      int n_free_bytes = buf_size - m_upstream_in_read;
+      int n_read = read(m_upstream_fd, buf+m_upstream_in_read, n_free_bytes);
+      m_upstream_in = buf;
+      m_upstream_in_read += n_read;
+      m_upstream_in_size = buf_size;
+      if (n_read == 0) {
+        // TODO: What if our response is EXACTLY BUFFER_SIZE bytes long?
+        // We'll initially fill up our buffer and our second call to read
+        // will return zero bytes causing this error. FIX IT!
+        error("We shouldn't be reading zero bytes...");
+      } else if (n_read == n_free_bytes) {
+        // The read filled up our buffer. We need to read more.
+        // Remain in this state and return.
+        return;
+      }
+      
       // Close upstream socket
+      close(m_upstream_fd);
+      
       // Remove upstream socket fd from map
-      // Parse http response
-      // Set appropriate http headers
-      // Generate output client http response (char*)
+      FDMap.erase(m_upstream_fd);
+      m_upstream_fd = -1;
+      
+      // Set the data we need to write
+      m_client_out = m_upstream_in;
+      m_client_out_size = m_upstream_in_read;
+      m_upstream_in = NULL;
+      m_upstream_in_read = 0;
+      m_upstream_in_size = 0;
+      
       // Advance state
+      m_state = STATE_CLIENT_WRITE;
     } else if (this->m_state == STATE_CLIENT_WRITE) {
       // Write to downstream client
       // Free downstream buffer
@@ -208,10 +246,14 @@ private:
   int m_client_in_read; // How many bytes have we already read?
   int m_client_in_size; // The size of the input buffer
   char* m_client_out;   // Output downstream buffer
+  int m_client_out_written;  // How many bytes have we already written?
+  int m_client_out_size;     // How many total bytes do we need to write?
   char* m_upstream_in;  // Input upstream buffer
+  int m_upstream_in_read;  // How many bytes have we already read?
+  int m_upstream_in_size;  // The size of the input buffer
   char* m_upstream_out; // Output upstream buffer
   int m_upstream_out_written;  // How many bytes have we already written?
-  int m_upstream_out_size;
+  int m_upstream_out_size;     // How many total bytes do we need to write?
   int m_client_fd;
   int m_upstream_fd;
 };
