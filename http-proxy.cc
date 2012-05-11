@@ -3,7 +3,10 @@
  * CS118 - Event-based HTTP Proxy
  */
 
+#include "http-request.h"
+#include <iostream>
 #include <map>
+#include <string>
 #include <vector>
 #include <fcntl.h>
 #include <stdio.h>
@@ -18,6 +21,7 @@ using namespace std;
 
 #define LISTENING_PORT 12345
 #define LISTEN_BACKLOG 5
+#define BUFFER_SIZE 1024
 
 // Gloabls
 void acceptConnection(int server_fd);
@@ -48,6 +52,8 @@ public:
   ProxyState() {
     this->m_state = STATE_DEFAULT;
     this->m_client_in = NULL;
+    this->m_client_in_read = 0;
+    this->m_client_in_size = 0;
     this->m_client_out = NULL;
     this->m_upstream_in = NULL;
     this->m_upstream_out = NULL;
@@ -70,14 +76,68 @@ public:
   
   void advanceState() {
     if (this->m_state == STATE_DEFAULT) {
-      // Map client socket to this ProxyState
-      FDMap[this->m_client_fd] = this;
-      // Advance State
+      FDMap[this->m_client_fd] = this;  // Map client socket to this ProxyState
       this->m_state = STATE_CLIENT_READ;
     } else if (this->m_state == STATE_CLIENT_READ) {
       // Read from client socket
-      // Parse http request
-      // Set appropriate http headers
+      char* buf;
+      size_t buf_size = m_client_in_size == 0 ? BUFFER_SIZE : m_client_in_size * 2;
+      buf = (char*)malloc(buf_size);
+      if (!buf) error("Out of memory");
+      if (m_client_in_size > 0) {
+        // We've already began the read
+        memcpy(buf, m_client_in, m_client_in_size);
+        free(m_client_in);
+        m_client_in = NULL;
+      }
+      int n_free_bytes = buf_size - m_client_in_read;
+      int n_read = read(m_client_fd, buf+m_client_in_read, n_free_bytes);
+      m_client_in = buf;
+      m_client_in_read += n_read;
+      m_client_in_size = buf_size;
+      if (n_read == 0) {
+        error("We shouldn't be reading zero bytes...");
+      } else if (n_read == n_free_bytes) {
+        // The read filled up our buffer. We need to read more.
+        // Remain in this state and return.
+        return;
+      }
+      
+      // Done reading. Parse http request
+      HttpRequest req_in;
+      try {
+        req_in.ParseRequest(m_client_in, m_client_in_read);
+      } catch (ParseException e) {
+        // TODO: Send 400 Bad Request
+        error("Invalid HTTP Request. TODO: Send 400");
+      }
+      
+      // Only process GET and HTTP 1.0
+      if (req_in.GetMethod() == HttpRequest::UNSUPPORTED) {
+        // TODO: Send 501 Not Implemented
+        error("Unsupported method. TODO: Send 501");
+      }
+      if (req_in.GetVersion() != "1.0") {
+        // TODO: Send 501 Not Implemented
+        error("Unsupported HTTP Version. TODO: Send 501");
+      }
+      
+      // Generate upstream http request
+      //HttpRequest req_out;
+      string host = req_in.GetHost();
+      int port = req_in.GetPort();
+      string path = req_in.GetPath();
+      string version = req_in.GetVersion();
+      cout << "Host: " << host << endl;
+      cout << "Port: " << port << endl;
+      cout << "Path: " << path << endl;
+      cout << "Version: " << version << endl;
+      
+      buf = (char *) malloc(req_in.GetTotalLength());
+      req_in.FormatRequest(buf);
+      cout << endl << endl << buf << endl << endl;
+      
+      
       // Generate output upstream http request (char*)
       // Open upstream socket
       // Map upstream socket fd to this ProxyState
@@ -109,10 +169,12 @@ public:
 private:
   // Private members
   int m_state;
-  char* m_client_in;   // Input downstream buffer
-  char* m_client_out;  // Output downstream buffer
-  char* m_upstream_in; // Input upstream buffer
-  char* m_upstream_out;  // Output upstream buffer
+  char* m_client_in;    // Input downstream buffer
+  int m_client_in_read; // How many bytes have we already read?
+  int m_client_in_size; // The size of the input buffer
+  char* m_client_out;   // Output downstream buffer
+  char* m_upstream_in;  // Input upstream buffer
+  char* m_upstream_out; // Output upstream buffer
   int m_client_fd;
   int m_upstream_fd;
 };
