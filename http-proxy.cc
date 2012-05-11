@@ -158,9 +158,7 @@ public:
       m_client_in = buf;
       m_client_in_read += n_read;
       m_client_in_size = buf_size;
-      if (n_read == 0) {
-        error("We shouldn't be reading zero bytes...");
-      } else if (n_read == n_free_bytes) {
+      if (n_read == n_free_bytes) {
         // The read filled up our buffer. We need to read more.
         // Remain in this state and return.
         return;
@@ -211,13 +209,13 @@ public:
       addr.ai_family = AF_UNSPEC;
       addr.ai_socktype = SOCK_STREAM;
       if (getaddrinfo(host.c_str(), port_str, &addr, &res) != 0) {
-        // TODO: Send 502 Bad Gateway
-        error("Could not get upstrea host address");
+        // Send 502 Bad Gateway
+        m_client_out_size = generateResponse("502", "Bad Gateway", &m_client_out);
+        m_state = STATE_CLIENT_WRITE;
+        return;
       }
       connect(m_upstream_fd, res->ai_addr, res->ai_addrlen);
       
-      //printf("Generated upstream request:\n\n%s\n\n", m_upstream_out);
-
       // Map upstream socket fd to this ProxyState
       FDMap[m_upstream_fd] = this;
       
@@ -235,8 +233,6 @@ public:
         // We need to wait resend the remaining bytes
         return;
       }
-      
-      //printf("Request from client\n\n%s\n", m_upstream_out);
       
       // Free upstream buffer
       free(m_upstream_out);
@@ -264,12 +260,7 @@ public:
       m_upstream_in = buf;
       m_upstream_in_read += n_read;
       m_upstream_in_size = buf_size;
-      if (n_read == 0) {
-        // TODO: What if our response is EXACTLY BUFFER_SIZE bytes long?
-        // We'll initially fill up our buffer and our second call to read
-        // will return zero bytes causing this error. FIX IT!
-        error("We shouldn't be reading zero bytes...");
-      } else if (n_read == n_free_bytes) {
+      if (n_read == n_free_bytes) {
         // The read filled up our buffer. We need to read more.
         // Remain in this state and return.
         return;
@@ -289,8 +280,6 @@ public:
       m_upstream_in_read = 0;
       m_upstream_in_size = 0;
       
-      //printf("Response to client:\n\n%s\n", m_client_out);
-      
       // Advance state
       m_state = STATE_CLIENT_WRITE;
       
@@ -305,8 +294,6 @@ public:
         // We need to wait resend the remaining bytes
         return;
       }
-      
-      //printf("Wrote response to client\n\n%s\n", m_client_out);
       
       // Free client out downstream buffer
       free(m_client_out);
@@ -340,25 +327,25 @@ public:
 private:
   // Private members
   int m_state;
-  char* m_client_in;    // Input downstream buffer
-  int m_client_in_read; // How many bytes have we already read?
-  int m_client_in_size; // The size of the input buffer
-  char* m_client_out;   // Output downstream buffer
-  int m_client_out_written;  // How many bytes have we already written?
-  int m_client_out_size;     // How many total bytes do we need to write?
-  char* m_upstream_in;  // Input upstream buffer
-  int m_upstream_in_read;  // How many bytes have we already read?
-  int m_upstream_in_size;  // The size of the input buffer
-  char* m_upstream_out; // Output upstream buffer
-  int m_upstream_out_written;  // How many bytes have we already written?
-  int m_upstream_out_size;     // How many total bytes do we need to write?
-  int m_client_fd;
-  int m_upstream_fd;
+  char* m_client_in;          // Input downstream buffer
+  int m_client_in_read;       // How many bytes have we already read?
+  int m_client_in_size;       // The size of the input buffer
+  char* m_client_out;         // Output downstream buffer
+  int m_client_out_written;   // How many bytes have we already written?
+  int m_client_out_size;      // How many total bytes do we need to write?
+  char* m_upstream_in;        // Input upstream buffer
+  int m_upstream_in_read;     // How many bytes have we already read?
+  int m_upstream_in_size;     // The size of the input buffer
+  char* m_upstream_out;       // Output upstream buffer
+  int m_upstream_out_written; // How many bytes have we already written?
+  int m_upstream_out_size;    // How many total bytes do we need to write?
+  int m_client_fd;            // Client file descriptor
+  int m_upstream_fd;          // Upstream file descriptor
 };
 
 
 // Sets the socket fd to non-blocking mode where all calls to read and write
-// return immediately
+// return immediately. This function is redundant as we're using polling anyways!
 int setNonblocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags == -1) flags = 0;
