@@ -3,6 +3,7 @@
  * CS118 - Event-based HTTP Proxy
  */
 
+#include "http-response.h"
 #include "http-request.h"
 #include <iostream>
 #include <map>
@@ -24,7 +25,8 @@ using namespace std;
 #define LISTEN_BACKLOG 5
 #define BUFFER_SIZE 1024
 
-// Gloabls
+// Forward Declarations
+inline void eventLoop(int server_fd);
 void acceptConnection(int server_fd);
 class ProxyState;
 
@@ -38,8 +40,25 @@ void error(const char *msg) {
   exit(1);
 }
 
+// Generates an HttpResponse cstring with the indicated status code
+// and message and palces it in buf. 
+// It is your responsibility to free this string!
+int generateResponse(const string &status_code, const string &status_message, char** buf) {
+  HttpResponse r;
+  r.SetVersion("1.0");
+  r.SetStatusCode(status_code);
+  r.SetStatusMsg(status_message);
+  r.ModifyHeader("Connection", "close");
+  int len = r.GetTotalLength();
+  char* out = (char*)malloc(len);
+  if (!out) error("Out of memory!");
+  r.FormatResponse(out);
+  *buf = out;
+  return len;
+}
+
 enum ProxyStateStates {
-  STATE_DEFAULT = -1, // Newly accepted connection
+  STATE_DEFAULT = -1,       // Newly accepted connection
   STATE_CLIENT_READ = 0,    // Waiting to read initial request
   STATE_UPSTREAM_WRITE = 1, // Waiting to write upstream request
   STATE_UPSTREAM_READ = 2,  // Waiting to read upstream request
@@ -66,27 +85,62 @@ public:
     this->m_upstream_fd = -1;
   }
   
+  ~ProxyState() {
+    // Free our unfreed strings!
+    if (m_client_in) {
+      free(m_client_in);
+      m_client_in = NULL;
+    }
+    if (m_client_out) {
+      m_client_out = NULL;
+    }    
+    if (m_upstream_in) {
+      free(m_upstream_in);
+      m_upstream_in = NULL;
+    }
+    if (m_upstream_out) {
+      free(m_upstream_out);
+      m_upstream_out = NULL;
+    }
+    // Close our unclosed sockets
+    if (m_client_fd > 0) {
+      close(m_client_fd);
+      m_client_fd = -1;
+    }
+    if (m_upstream_fd > 0) {
+      close(m_upstream_fd);
+      m_upstream_fd = -1;
+    }
+  }
+  
+  // Returns the client file descriptor
   int getClientFd() {
     return this->m_client_fd;
   }
   
+  // Sets the client file descriptor
   void setClientFd(int client_fd) {
     this->m_client_fd = client_fd;
     this->client_addr = client_addr;
   }
   
+  // Returns the upstream file descriptor
   int getUpstreamFd() {
     return this->m_upstream_fd;
   }
   
+  // Returns the current state of the proxy 
   const int getState() {
     return this->m_state;
   }
   
+  // Advances the current state of the proxy
+  // This is the main method
   void advanceState() {
     if (this->m_state == STATE_DEFAULT) {
       FDMap[this->m_client_fd] = this;  // Map client socket to this ProxyState
       this->m_state = STATE_CLIENT_READ;
+      
     } else if (this->m_state == STATE_CLIENT_READ) {
       // Read from client socket
       char* buf;
@@ -117,18 +171,24 @@ public:
       try {
         req_in.ParseRequest(m_client_in, m_client_in_read);
       } catch (ParseException e) {
-        // TODO: Send 400 Bad Request
-        error("Invalid HTTP Request. TODO: Send 400");
+        // Send 400 Bad Request
+        m_client_out_size = generateResponse("400", "Bad Request", &m_client_out);
+        m_state = STATE_CLIENT_WRITE;
+        return;
       }
       
       // Only process GET and HTTP 1.0
       if (req_in.GetMethod() == HttpRequest::UNSUPPORTED) {
-        // TODO: Send 501 Not Implemented
-        error("Unsupported method. TODO: Send 501");
+        // Send 501 Not Implemented
+        m_client_out_size = generateResponse("501", "Not Implemented", &m_client_out);
+        m_state = STATE_CLIENT_WRITE;
+        return;
       }
       if (req_in.GetVersion() != "1.0") {
-        // TODO: Send 505 HTTP Version Not Implemented
-        error("Unsupported HTTP Version. TODO: Send 505");
+        // Send 505 HTTP Version Not Implemented
+        m_client_out_size = generateResponse("505", "HTTP Version Not Supported", &m_client_out);
+        m_state = STATE_CLIENT_WRITE;
+        return;
       }
       
       // Set connection close header
@@ -163,6 +223,7 @@ public:
       
       // Advance state
       m_state = STATE_UPSTREAM_WRITE;
+      
     } else if (this->m_state == STATE_UPSTREAM_WRITE) {
       // Write to upstream socket
       int n_remaining = m_upstream_out_size - m_upstream_out_written;
@@ -185,6 +246,7 @@ public:
       
       // Advance state
       m_state = STATE_UPSTREAM_READ;
+      
     } else if (this->m_state == STATE_UPSTREAM_READ) {
       // Read from upstream socket
       char* buf;
@@ -231,6 +293,7 @@ public:
       
       // Advance state
       m_state = STATE_CLIENT_WRITE;
+      
     } else if (this->m_state == STATE_CLIENT_WRITE) {
       // Write to downstream client
       int n_remaining = m_client_out_size - m_client_out_written;
@@ -324,89 +387,96 @@ int main (int argc, char *argv[]) {
   setNonblocking(server_fd);  // Force server into nonblocking mode
   printf("Listening on port %d\n", LISTENING_PORT);
   
+  // Start event loop!
   while (true) {
-    // Determine which sockets we need to poll on!
-    vector<pollfd> poll_fds;
-    struct pollfd server_poll_fd;  // We always poll on the server socket
-    server_poll_fd.fd = server_fd;
-    server_poll_fd.events = 0 | POLLIN;  // Unblock when socket is readable
-    printf("Polling on fd %d (server)\n", server_fd);
-    poll_fds.push_back(server_poll_fd);
-    for (vector<ProxyState*>::iterator it = ProxyStates.begin(); it < ProxyStates.end(); it++) {
-      ProxyState* ps = *it;
-      // Which auxilary sockets do we need to poll on?
-      int current_state = ps->getState();
-      if (current_state == STATE_CLIENT_READ) {
-        // Waiting to read from client socket
-        pollfd pfd;
-        pfd.fd = ps->getClientFd();
-        pfd.events = 0 | POLLIN;
-        poll_fds.push_back(pfd);
-        printf("Polling on fd %d (client read)\n", pfd.fd);
-      } else if (current_state == STATE_UPSTREAM_WRITE) { 
-        // Waiting to write to upstream socket
-        pollfd pfd;
-        pfd.fd = ps->getUpstreamFd();
-        pfd.events = 0 | POLLOUT;
-        printf("Polling on fd %d (upstream write)\n", pfd.fd);
-        poll_fds.push_back(pfd);
-      } else if (current_state == STATE_UPSTREAM_READ) {
-        pollfd pfd;
-        pfd.fd = ps->getUpstreamFd();
-        pfd.events = 0 | POLLIN;
-        printf("Polling on fd %d (upstream read)\n", pfd.fd);
-        poll_fds.push_back(pfd);
-      } else if (current_state == STATE_CLIENT_WRITE) {
-        pollfd pfd;
-        pfd.fd = ps->getClientFd();
-        pfd.events = 0 | POLLOUT;
-        printf("Polling on fd %d (client write)\n", pfd.fd);
-        poll_fds.push_back(pfd);
-      } else {
-        perror("Invalid Proxy state!");
-      }
+    eventLoop(server_fd);
+  }
+}
 
+// This function runs repeatedly
+// It is responsible for determining which sockets to poll on and
+// dispatching events to their appropriate ProxyState->advanceState() handler
+inline void eventLoop(int server_fd) {
+  // Determine which sockets we need to poll on!
+  vector<pollfd> poll_fds;
+  
+  // We always poll on the server socket
+  struct pollfd server_poll_fd;
+  server_poll_fd.fd = server_fd;
+  server_poll_fd.events = 0 | POLLIN;  // Unblock when socket is readable
+  printf("Polling on fd %d (server)\n", server_fd);
+  poll_fds.push_back(server_poll_fd);
+  
+  // Which auxilary sockets do we need to poll on?
+  for (vector<ProxyState*>::iterator it = ProxyStates.begin(); it < ProxyStates.end(); it++) {
+    ProxyState* ps = *it;
+    
+    int current_state = ps->getState();
+    if (current_state == STATE_CLIENT_READ) {
+      // Waiting to read from client socket
+      pollfd pfd;
+      pfd.fd = ps->getClientFd();
+      pfd.events = 0 | POLLIN;
+      poll_fds.push_back(pfd);
+      printf("Polling on fd %d (client read)\n", pfd.fd);
+    } else if (current_state == STATE_UPSTREAM_WRITE) { 
+      // Waiting to write to upstream socket
+      pollfd pfd;
+      pfd.fd = ps->getUpstreamFd();
+      pfd.events = 0 | POLLOUT;
+      printf("Polling on fd %d (upstream write)\n", pfd.fd);
+      poll_fds.push_back(pfd);
+    } else if (current_state == STATE_UPSTREAM_READ) {
+      // Waiting to read from upstream socket
+      pollfd pfd;
+      pfd.fd = ps->getUpstreamFd();
+      pfd.events = 0 | POLLIN;
+      printf("Polling on fd %d (upstream read)\n", pfd.fd);
+      poll_fds.push_back(pfd);
+    } else if (current_state == STATE_CLIENT_WRITE) {
+      // Waiting to write to client socket
+      pollfd pfd;
+      pfd.fd = ps->getClientFd();
+      pfd.events = 0 | POLLOUT;
+      printf("Polling on fd %d (client write)\n", pfd.fd);
+      poll_fds.push_back(pfd);
+    } else {
+      perror("Invalid Proxy state!");
     }
     
-    // Begin polling
-    int rv = poll((pollfd*)&poll_fds[0], poll_fds.size(), 3000);
-    if (rv < 0) {
-      error("Unable to poll on socket");
-    } else if (rv == 0) {
-      //error("Timeout ocurred");
-    } else {
-      printf("%d events occurred!\n", rv);
-      for (vector<pollfd>::iterator it = poll_fds.begin(); it < poll_fds.end(); it++) {
-        if (it->fd == server_fd) {
-          if (it->revents & POLLIN) {
-            // Handle new incoming connection on server_fd
-            printf("Accepting connection from server_fd\n");
-            acceptConnection(server_fd);
-          } else if (it->revents & POLLERR || 
-                     it->revents & POLLHUP ||
-                     it->revents & POLLNVAL) {
-            error("Something went wrong with the server socket");
-          } else {
-            // No events on the server socket
-            //error("No events on the server socket! :)");
-          }
-        } else {
-          if (it->revents & POLLIN || it->revents & POLLOUT) {
-            // Handle regular fd connection
-            FDMap[it->fd]->advanceState();
-          } else if (it->revents & POLLERR ||
-                     it->revents & POLLHUP ||
-                     it->revents & POLLNVAL) {
-            error("Something went wrong with a socket");
-          } else {
-            // No events on this socket
-          }
+  }
+  
+  // Begin polling
+  int rv = poll((pollfd*)&poll_fds[0], poll_fds.size(), 3000);
+  if (rv < 0) {
+    error("Unable to poll on socket");
+  } else if (rv > 0) {
+    printf("%d events occurred!\n", rv);
+    for (vector<pollfd>::iterator it = poll_fds.begin(); it < poll_fds.end(); it++) {
+      if (it->fd == server_fd) {
+        // Handle events on the server socket
+        if (it->revents & POLLIN) {
+          printf("Accepting connection from server_fd\n");
+          acceptConnection(server_fd);
+        } else if (it->revents & POLLERR || 
+                   it->revents & POLLHUP ||
+                   it->revents & POLLNVAL) {
+          error("Something went wrong with the server socket");
+        }
+      } else {
+        // Hanlde events on auxilary sockets
+        if (it->revents & POLLIN || it->revents & POLLOUT) {
+          // Handle regular fd connection
+          FDMap[it->fd]->advanceState();
+        } else if (it->revents & POLLERR ||
+                   it->revents & POLLHUP ||
+                   it->revents & POLLNVAL) {
+          error("Something went wrong with a socket");
         }
       }
     }
-  }  // end while(true)
+  } 
 }
-
 
 // Accepts a connection on server_fd, creates a new ProxyState object
 // for it, and adds the new client connection fd to our polling vector
@@ -422,5 +492,4 @@ void acceptConnection(int server_fd) {
   s->advanceState();
   ProxyStates.push_back(s);
 }
-
 
