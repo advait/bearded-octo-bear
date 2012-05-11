@@ -156,7 +156,7 @@ public:
       }
       connect(m_upstream_fd, res->ai_addr, res->ai_addrlen);
       
-      printf("Generated upstream request:\n\n%s\n\n", m_upstream_out);
+      //printf("Generated upstream request:\n\n%s\n\n", m_upstream_out);
 
       // Map upstream socket fd to this ProxyState
       FDMap[m_upstream_fd] = this;
@@ -174,6 +174,8 @@ public:
         // We need to wait resend the remaining bytes
         return;
       }
+      
+      //printf("Request from client\n\n%s\n", m_upstream_out);
       
       // Free upstream buffer
       free(m_upstream_out);
@@ -225,14 +227,47 @@ public:
       m_upstream_in_read = 0;
       m_upstream_in_size = 0;
       
+      //printf("Response to client:\n\n%s\n", m_client_out);
+      
       // Advance state
       m_state = STATE_CLIENT_WRITE;
     } else if (this->m_state == STATE_CLIENT_WRITE) {
       // Write to downstream client
-      // Free downstream buffer
+      int n_remaining = m_client_out_size - m_client_out_written;
+      int n_written = write(m_client_fd, m_client_out+m_client_out_written, n_remaining);
+      m_client_out_written += n_written;
+      printf("Wrote %d bytes to client fd %d\n", n_written, m_client_fd);
+      if (n_written < n_remaining) {
+        // Kernel rejected some of our write.
+        // We need to wait resend the remaining bytes
+        return;
+      }
+      
+      //printf("Wrote response to client\n\n%s\n", m_client_out);
+      
+      // Free client out downstream buffer
+      free(m_client_out);
+      m_client_out = NULL;
+      m_client_out_size = 0;
+      m_client_out_written = 0;
+      
       // Close client socket
+      close(m_client_fd);
+      
       // Remove client fd from map
+      FDMap.erase(m_client_fd);
+      m_client_fd = -1;
+      
+      // Remove this ProxyState from ProxyStates vector
+      for (vector<ProxyState*>::iterator it = ProxyStates.begin(); it < ProxyStates.end(); it++) {
+        if (*it == this) {
+          ProxyStates.erase(it);
+          break;
+        }
+      }
+      
       // Free this ProxyState!
+      delete this;
     }
   }
   
@@ -313,33 +348,35 @@ int main (int argc, char *argv[]) {
         pollfd pfd;
         pfd.fd = ps->getUpstreamFd();
         pfd.events = 0 | POLLOUT;
+        printf("Polling on fd %d (upstream write)\n", pfd.fd);
         poll_fds.push_back(pfd);
       } else if (current_state == STATE_UPSTREAM_READ) {
         pollfd pfd;
         pfd.fd = ps->getUpstreamFd();
         pfd.events = 0 | POLLIN;
+        printf("Polling on fd %d (upstream read)\n", pfd.fd);
+        poll_fds.push_back(pfd);
+      } else if (current_state == STATE_CLIENT_WRITE) {
+        pollfd pfd;
+        pfd.fd = ps->getClientFd();
+        pfd.events = 0 | POLLOUT;
+        printf("Polling on fd %d (client write)\n", pfd.fd);
         poll_fds.push_back(pfd);
       } else {
-        perror("Not implemented yet!");
+        perror("Invalid Proxy state!");
       }
-          
-  //        DEFAULT,        // Newly accepted connection
-  //        CLIENT_READ,    // Waiting to read initial request
-  //        UPSTREAM_WRITE, // Waiting to write upstream request
-  //        UPSTREAM_READ,  // Waiting to read upstream request
-  //        CLIENT_WRITE,   // Waiting to write to downstream client
+
     }
     
     // Begin polling
     int rv = poll((pollfd*)&poll_fds[0], poll_fds.size(), 3000);
-    printf("%d events occurred!\n", rv);
     if (rv < 0) {
       error("Unable to poll on socket");
     } else if (rv == 0) {
       //error("Timeout ocurred");
     } else {
+      printf("%d events occurred!\n", rv);
       for (vector<pollfd>::iterator it = poll_fds.begin(); it < poll_fds.end(); it++) {
-        printf("Checking fd %d\n", it->fd);
         if (it->fd == server_fd) {
           if (it->revents & POLLIN) {
             // Handle new incoming connection on server_fd
