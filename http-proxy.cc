@@ -58,6 +58,8 @@ public:
     this->m_client_out = NULL;
     this->m_upstream_in = NULL;
     this->m_upstream_out = NULL;
+    this->m_upstream_out_written = 0;
+    this->m_upstream_out_size = 0;
     this->m_client_fd = -1;
     this->m_upstream_fd = -1;
   }
@@ -69,6 +71,10 @@ public:
   void setClientFd(int client_fd) {
     this->m_client_fd = client_fd;
     this->client_addr = client_addr;
+  }
+  
+  int getUpstreamFd() {
+    return this->m_upstream_fd;
   }
   
   const int getState() {
@@ -119,19 +125,20 @@ public:
         error("Unsupported method. TODO: Send 501");
       }
       if (req_in.GetVersion() != "1.0") {
-        // TODO: Send 501 Not Implemented
-        error("Unsupported HTTP Version. TODO: Send 501");
+        // TODO: Send 505 HTTP Version Not Implemented
+        error("Unsupported HTTP Version. TODO: Send 505");
       }
       
       // Set connection close header
       req_in.ModifyHeader("Conection", "close");
       
       // Generate output upstream http request (char*)
-      m_upstream_out = (char *) malloc(req_in.GetTotalLength());
+      m_upstream_out_size = req_in.GetTotalLength();
+      m_upstream_out = (char *) malloc(m_upstream_out_size);
       if (m_upstream_out == NULL) error("Out of memory!");
       req_in.FormatRequest(m_upstream_out);
       
-      // Open upstream socket
+      // Get IP of upstream host and connect
       string host = req_in.GetHost();
       int port = req_in.GetPort();
       char port_str[10];
@@ -141,22 +148,39 @@ public:
       memset(&addr, 0, sizeof addr);
       addr.ai_family = AF_UNSPEC;
       addr.ai_socktype = SOCK_STREAM;
-      getaddrinfo(host.c_str(), port_str, &addr, &res);
+      if (getaddrinfo(host.c_str(), port_str, &addr, &res) != 0) {
+        // TODO: Send 502 Bad Gateway
+        error("Could not get upstrea host address");
+      }
+      connect(m_upstream_fd, res->ai_addr, res->ai_addrlen);
       
       printf("Generated upstream request:\n\n%s\n\n", m_upstream_out);
 
       // Map upstream socket fd to this ProxyState
       FDMap[m_upstream_fd] = this;
       
-      // Connect!
-      connect(m_upstream_fd, res->ai_addr, res->ai_addrlen);
-      
       // Advance state
       m_state = STATE_UPSTREAM_WRITE;
     } else if (this->m_state == STATE_UPSTREAM_WRITE) {
       // Write to upstream socket
+      int n_remaining = m_upstream_out_size - m_upstream_out_written;
+      int n_written = write(m_upstream_fd, m_upstream_out+m_upstream_out_written, n_remaining);
+      m_upstream_out_written += n_written;
+      printf("Wrote %d bytes to upstream fd %d\n", n_written, m_upstream_fd);
+      if (n_written < n_remaining) {
+        // Kernel rejected some of our write.
+        // We need to wait resend the remaining bytes
+        return;
+      }
+      
       // Free upstream buffer
+      free(m_upstream_out);
+      m_upstream_out = NULL;
+      m_upstream_out_size = 0;
+      m_upstream_out_written = 0;
+      
       // Advance state
+      m_state = STATE_UPSTREAM_READ;
     } else if (this->m_state == STATE_UPSTREAM_READ) {
       // Read from upstream socket
       // Close upstream socket
@@ -186,6 +210,8 @@ private:
   char* m_client_out;   // Output downstream buffer
   char* m_upstream_in;  // Input upstream buffer
   char* m_upstream_out; // Output upstream buffer
+  int m_upstream_out_written;  // How many bytes have we already written?
+  int m_upstream_out_size;
   int m_client_fd;
   int m_upstream_fd;
 };
@@ -237,9 +263,20 @@ int main (int argc, char *argv[]) {
         // Waiting to read from client socket
         pollfd pfd;
         pfd.fd = ps->getClientFd();
-        pfd.events = 0 | POLLIN;  // Waiting for read
+        pfd.events = 0 | POLLIN;
         poll_fds.push_back(pfd);
         printf("Polling on fd %d (client read)\n", pfd.fd);
+      } else if (current_state == STATE_UPSTREAM_WRITE) { 
+        // Waiting to write to upstream socket
+        pollfd pfd;
+        pfd.fd = ps->getUpstreamFd();
+        pfd.events = 0 | POLLOUT;
+        poll_fds.push_back(pfd);
+      } else if (current_state == STATE_UPSTREAM_READ) {
+        pollfd pfd;
+        pfd.fd = ps->getUpstreamFd();
+        pfd.events = 0 | POLLIN;
+        poll_fds.push_back(pfd);
       } else {
         perror("Not implemented yet!");
       }
@@ -269,14 +306,22 @@ int main (int argc, char *argv[]) {
           } else if (it->revents & POLLERR || 
                      it->revents & POLLHUP ||
                      it->revents & POLLNVAL) {
-            error("Something was wrong with the socket connection");
+            error("Something went wrong with the server socket");
           } else {
             // No events on the server socket
             //error("No events on the server socket! :)");
           }
         } else {
-          // Handle regular fd connection
-          FDMap[it->fd]->advanceState();
+          if (it->revents & POLLIN || it->revents & POLLOUT) {
+            // Handle regular fd connection
+            FDMap[it->fd]->advanceState();
+          } else if (it->revents & POLLERR ||
+                     it->revents & POLLHUP ||
+                     it->revents & POLLNVAL) {
+            error("Something went wrong with a socket");
+          } else {
+            // No events on this socket
+          }
         }
       }
     }
