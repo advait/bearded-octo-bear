@@ -3,6 +3,7 @@
  * CS118 - Event-based HTTP Proxy
  */
 
+#include "http-common.h"
 #include "http-response.h"
 #include "http-request.h"
 #include <boost/crc.hpp>
@@ -37,11 +38,6 @@ vector<ProxyState*> ProxyStates;
 map<int, ProxyState*> FDMap;  // Maps fds to their ProxyState handlers
 map<int, CacheEntry> HTTPCache;
 
-// Print error and exit 1
-void error(const char *msg) {
-  perror(msg);
-  exit(1);
-}
 
 // Represents an entry in the cache
 struct CacheEntry {
@@ -181,6 +177,8 @@ public:
         return;
       }
       
+      printf("Request:\n\n%s\n\n", m_client_in);
+      
       // Get crc32 checksum
       m_request_checksum = crc32(m_client_in, m_client_in_read);
       map<int, CacheEntry>::iterator it = HTTPCache.find(m_request_checksum);
@@ -220,6 +218,10 @@ public:
         m_state = STATE_CLIENT_WRITE;
         return;
       }
+      
+      cout << "Host: " << req_in.GetHost() << endl;
+      cout << "Port: " << req_in.GetPort() << endl;
+      cout << "Path: " << req_in.GetPath() << endl;
       
       // Set connection close header
       req_in.ModifyHeader("Conection", "close");

@@ -116,7 +116,7 @@ public:
    * @brief Get host of the HTTP request
    */
   const std::string &
-  GetHost () const;
+  GetHost ();
 
   /**
    * @brief Set host of the HTTP request

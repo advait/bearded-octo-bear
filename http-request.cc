@@ -69,6 +69,7 @@ HttpRequest::ParseRequest (const char *buffer, size_t size)
     {
       // just path
       SetPath (*token);
+      SetPort(80);
     }
   else
     {
@@ -90,6 +91,7 @@ HttpRequest::ParseRequest (const char *buffer, size_t size)
         {
           string port = token->substr (posPort + 1, posSlash - posPort - 1);
           // TRACE (port);
+          
           SetPort (boost::lexical_cast<unsigned short> (port));
 
           string host = token->substr (pos, posPort-pos);
@@ -194,8 +196,12 @@ HttpRequest::SetMethod (HttpRequest::MethodEnum method)
 // }
 
 const std::string &
-HttpRequest::GetHost () const
+HttpRequest::GetHost ()
 {
+  string host_header = this->FindHeader("Host");
+  if (host_header != "") {
+    m_host = host_header;
+  }
   return m_host;
 }
 
