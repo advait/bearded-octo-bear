@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <fcntl.h>
+#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -122,26 +123,36 @@ public:
         error("Unsupported HTTP Version. TODO: Send 501");
       }
       
-      // Generate upstream http request
-      //HttpRequest req_out;
-      string host = req_in.GetHost();
-      int port = req_in.GetPort();
-      string path = req_in.GetPath();
-      string version = req_in.GetVersion();
-      cout << "Host: " << host << endl;
-      cout << "Port: " << port << endl;
-      cout << "Path: " << path << endl;
-      cout << "Version: " << version << endl;
-      
-      buf = (char *) malloc(req_in.GetTotalLength());
-      req_in.FormatRequest(buf);
-      cout << endl << endl << buf << endl << endl;
-      
+      // Set connection close header
+      req_in.ModifyHeader("Conection", "close");
       
       // Generate output upstream http request (char*)
+      m_upstream_out = (char *) malloc(req_in.GetTotalLength());
+      if (m_upstream_out == NULL) error("Out of memory!");
+      req_in.FormatRequest(m_upstream_out);
+      
       // Open upstream socket
+      string host = req_in.GetHost();
+      int port = req_in.GetPort();
+      char port_str[10];
+      sprintf(port_str, "%d", port);
+      m_upstream_fd = socket(AF_INET, SOCK_STREAM, 0);
+      addrinfo addr, *res;
+      memset(&addr, 0, sizeof addr);
+      addr.ai_family = AF_UNSPEC;
+      addr.ai_socktype = SOCK_STREAM;
+      getaddrinfo(host.c_str(), port_str, &addr, &res);
+      
+      printf("Generated upstream request:\n\n%s\n\n", m_upstream_out);
+
       // Map upstream socket fd to this ProxyState
+      FDMap[m_upstream_fd] = this;
+      
+      // Connect!
+      connect(m_upstream_fd, res->ai_addr, res->ai_addrlen);
+      
       // Advance state
+      m_state = STATE_UPSTREAM_WRITE;
     } else if (this->m_state == STATE_UPSTREAM_WRITE) {
       // Write to upstream socket
       // Free upstream buffer
@@ -286,20 +297,6 @@ void acceptConnection(int server_fd) {
   s->setClientFd(client_fd);
   s->advanceState();
   ProxyStates.push_back(s);
-  
-  
-//  // Read request
-//  char buffer[256];
-//  int n = read(client_fd, buffer, 256);
-//  if (n < 0) {
-//    error("Unable to read from socket");
-//  }
-//  
-//  // Write response
-//  if (write(client_fd, "Got your message bro", 20) < 0) {
-//    error("Unable to write to socket");
-//  }
-//  close(client_fd);  
 }
 
 
