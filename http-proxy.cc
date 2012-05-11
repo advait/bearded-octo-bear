@@ -5,6 +5,7 @@
 
 #include "http-response.h"
 #include "http-request.h"
+#include <boost/crc.hpp>
 #include <iostream>
 #include <map>
 #include <string>
@@ -55,6 +56,13 @@ int generateResponse(const string &status_code, const string &status_message, ch
   r.FormatResponse(out);
   *buf = out;
   return len;
+}
+
+// Returns the crc32 checksum of the input string
+int crc32(const char* s, size_t len) {
+  boost::crc_32_type result;
+  result.process_bytes(s, len);
+  return result.checksum();
 }
 
 enum ProxyStateStates {
@@ -163,6 +171,10 @@ public:
         // Remain in this state and return.
         return;
       }
+      
+      // Get crc32 checksum
+      int checksum = crc32(m_client_in, m_client_in_read);
+      printf("Checksum: %d\n", checksum);
       
       // Done reading. Parse http request
       HttpRequest req_in;
