@@ -30,16 +30,24 @@ using namespace std;
 inline void eventLoop(int server_fd);
 void acceptConnection(int server_fd);
 class ProxyState;
+struct CacheEntry;
 
 // Globals
 vector<ProxyState*> ProxyStates;
 map<int, ProxyState*> FDMap;  // Maps fds to their ProxyState handlers
+map<int, CacheEntry> HTTPCache;
 
 // Print error and exit 1
 void error(const char *msg) {
   perror(msg);
   exit(1);
 }
+
+// Represents an entry in the cache
+struct CacheEntry {
+  char* response;
+  size_t len;
+};
 
 // Generates an HttpResponse cstring with the indicated status code
 // and message and palces it in buf. 
@@ -91,6 +99,7 @@ public:
     this->m_upstream_out_size = 0;
     this->m_client_fd = -1;
     this->m_upstream_fd = -1;
+    this->m_request_checksum = 0;
   }
   
   ~ProxyState() {
@@ -173,8 +182,19 @@ public:
       }
       
       // Get crc32 checksum
-      int checksum = crc32(m_client_in, m_client_in_read);
-      printf("Checksum: %d\n", checksum);
+      m_request_checksum = crc32(m_client_in, m_client_in_read);
+      map<int, CacheEntry>::iterator it = HTTPCache.find(m_request_checksum);
+      if (it != HTTPCache.end()) {
+        // We found our response in our cache! send it!
+        printf("Found cached response! No need for upstream request!\n");
+        m_client_out = (char*)malloc(it->second.len);
+        if (!m_client_out) error("Out of memory!");
+        memcpy(m_client_out, it->second.response, it->second.len);
+        m_client_out_size = it->second.len;
+        m_state = STATE_CLIENT_WRITE;
+        return;
+      }
+      printf("Checksum: %d\n", m_request_checksum);
       
       // Done reading. Parse http request
       HttpRequest req_in;
@@ -285,6 +305,14 @@ public:
       FDMap.erase(m_upstream_fd);
       m_upstream_fd = -1;
       
+      // Cache the response
+      CacheEntry ce;
+      ce.len = m_upstream_in_read;
+      ce.response = (char*)malloc(ce.len);
+      memcpy(ce.response, m_upstream_in, ce.len);
+      if (!ce.response) error("Out of memory!");
+      HTTPCache[m_request_checksum] = ce;
+      
       // Set the data we need to write
       m_client_out = m_upstream_in;
       m_client_out_size = m_upstream_in_read;
@@ -353,6 +381,7 @@ private:
   int m_upstream_out_size;    // How many total bytes do we need to write?
   int m_client_fd;            // Client file descriptor
   int m_upstream_fd;          // Upstream file descriptor
+  int m_request_checksum;     // The checksum of the input request
 };
 
 
