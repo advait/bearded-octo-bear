@@ -156,37 +156,8 @@ public:
       this->m_state = STATE_CLIENT_READ;
       
     } else if (this->m_state == STATE_CLIENT_READ) {
-      size_t n_read = 0;
-      size_t buf_len = BUFFER_SIZE;
-      size_t free_space = BUFFER_SIZE;
-      char* buf = (char*)malloc(buf_len);
-      if (!buf) error("Out of memory!");
-      while (true) {
-        int this_read = recv(m_client_fd, buf+n_read, free_space, 0);
-        if (this_read == -1) {
-          if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            break;
-          } else {
-            error("Error reading from socket");
-          }
-        } else if (this_read == 0) {
-          break;  // Client connection closed?
-        }
-        n_read += this_read;
-        free_space = buf_len - n_read;
-        if (free_space == 0) {
-          size_t _new_buf_len = buf_len * 2;
-          char* _new_buf = (char*)malloc(_new_buf_len);
-          memcpy(_new_buf, buf, n_read);
-          free(buf);
-          buf = _new_buf;
-          buf_len = _new_buf_len;
-          free_space = buf_len - n_read;
-        }
-      }
-      m_client_in = buf;
-      m_client_in_read = n_read;
-      m_client_in_size = buf_len;
+      // Read everything from socket
+      recvAll(m_client_fd, &m_client_in, &m_client_in_read, &m_client_in_size);
       
       // Get crc32 checksum
       m_request_checksum = crc32(m_client_in, m_client_in_read);
@@ -289,39 +260,7 @@ public:
       
     } else if (this->m_state == STATE_UPSTREAM_READ) {
       // Read from upstream socket
-      size_t n_read = 0;
-      size_t buf_len = BUFFER_SIZE;
-      size_t free_space = BUFFER_SIZE;
-      char* buf = (char*)malloc(buf_len);
-      if (!buf) error("Out of memory!");
-      while (true) {
-        printf("RECVING\n");
-        int this_read = recv(m_upstream_fd, buf+n_read, free_space, 0);
-        printf("DONE RECVING %d\n", this_read);
-        if (this_read == -1) {
-          if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            break;
-          } else {
-            error("Error reading from socket");
-          }
-        } else if (this_read == 0) {
-          break;  // Upstream connection closed
-        }
-        n_read += this_read;
-        free_space = buf_len - n_read;
-        if (free_space == 0) {
-          size_t _new_buf_len = buf_len * 2;
-          char* _new_buf = (char*)malloc(_new_buf_len);
-          memcpy(_new_buf, buf, n_read);
-          free(buf);
-          buf = _new_buf;
-          buf_len = _new_buf_len;
-          free_space = buf_len - n_read;
-        }
-      }
-      m_upstream_in = buf;
-      m_upstream_in_read = n_read;
-      m_upstream_in_size = buf_len;
+      recvAll(m_upstream_fd, &m_upstream_in, &m_upstream_in_read, &m_upstream_in_size);
       
       // Close upstream socket
       close(m_upstream_fd);
@@ -392,6 +331,44 @@ public:
   sockaddr_in client_addr;
   
 private:
+  // Private methods
+  
+  // Recieves all the data from sock_fd, creates a new buffer in buf, and populates
+  // the parameters buf_used and buf_len
+  void recvAll(int sock_fd, char** out_buf, int* out_buf_used, int* out_buf_len) {
+    int n_read = 0;
+    int buf_len = BUFFER_SIZE;
+    int free_space = BUFFER_SIZE;
+    char* buf = (char*)malloc(buf_len);
+    if (!buf) error("Out of memory!");
+    while (true) {
+      int this_read = recv(sock_fd, buf+n_read, free_space, 0);
+      if (this_read == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          break;
+        } else {
+          error("Error reading from socket");
+        }
+      } else if (this_read == 0) {
+        break;  // Connection closed
+      }
+      n_read += this_read;
+      free_space = buf_len - n_read;
+      if (free_space == 0) {
+        size_t _new_buf_len = buf_len * 2;
+        char* _new_buf = (char*)malloc(_new_buf_len);
+        memcpy(_new_buf, buf, n_read);
+        free(buf);
+        buf = _new_buf;
+        buf_len = _new_buf_len;
+        free_space = buf_len - n_read;
+      }
+    }
+    *out_buf = buf;
+    *out_buf_used = n_read;
+    *out_buf_len = buf_len;
+  }
+  
   // Private members
   int m_state;
   char* m_client_in;          // Input downstream buffer
