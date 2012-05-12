@@ -11,6 +11,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -155,29 +156,37 @@ public:
       this->m_state = STATE_CLIENT_READ;
       
     } else if (this->m_state == STATE_CLIENT_READ) {
-      // Read from client socket
-      char* buf;
-      size_t buf_size = m_client_in_size == 0 ? BUFFER_SIZE : m_client_in_size * 2;
-      buf = (char*)malloc(buf_size);
-      if (!buf) error("Out of memory");
-      if (m_client_in_size > 0) {
-        // We've already began the read
-        memcpy(buf, m_client_in, m_client_in_size);
-        free(m_client_in);
-        m_client_in = NULL;
+      size_t n_read = 0;
+      size_t buf_len = BUFFER_SIZE;
+      size_t free_space = BUFFER_SIZE;
+      char* buf = (char*)malloc(buf_len);
+      if (!buf) error("Out of memory!");
+      while (true) {
+        int this_read = recv(m_client_fd, buf+n_read, free_space, 0);
+        if (this_read == -1) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            break;
+          } else {
+            error("Error reading from socket");
+          }
+        } else if (this_read == 0) {
+          break;  // Client connection closed?
+        }
+        n_read += this_read;
+        free_space = buf_len - n_read;
+        if (free_space == 0) {
+          size_t _new_buf_len = buf_len * 2;
+          char* _new_buf = (char*)malloc(_new_buf_len);
+          memcpy(_new_buf, buf, n_read);
+          free(buf);
+          buf = _new_buf;
+          buf_len = _new_buf_len;
+          free_space = buf_len - n_read;
+        }
       }
-      int n_free_bytes = buf_size - m_client_in_read;
-      int n_read = read(m_client_fd, buf+m_client_in_read, n_free_bytes);
       m_client_in = buf;
-      m_client_in_read += n_read;
-      m_client_in_size = buf_size;
-      if (n_read == n_free_bytes) {
-        // The read filled up our buffer. We need to read more.
-        // Remain in this state and return.
-        return;
-      }
-      
-      printf("Request:\n\n%s\n\n", m_client_in);
+      m_client_in_read = n_read;
+      m_client_in_size = buf_len;
       
       // Get crc32 checksum
       m_request_checksum = crc32(m_client_in, m_client_in_read);
@@ -280,26 +289,39 @@ public:
       
     } else if (this->m_state == STATE_UPSTREAM_READ) {
       // Read from upstream socket
-      char* buf;
-      size_t buf_size = m_upstream_in_size == 0 ? BUFFER_SIZE : m_upstream_in_size * 2;
-      buf = (char*)malloc(buf_size);
-      if (!buf) error("Out of memory");
-      if (m_upstream_in_size > 0) {
-        // We've already began the read
-        memcpy(buf, m_upstream_in, m_upstream_in_size);
-        free(m_upstream_in);
-        m_client_in = NULL;
+      size_t n_read = 0;
+      size_t buf_len = BUFFER_SIZE;
+      size_t free_space = BUFFER_SIZE;
+      char* buf = (char*)malloc(buf_len);
+      if (!buf) error("Out of memory!");
+      while (true) {
+        printf("RECVING\n");
+        int this_read = recv(m_upstream_fd, buf+n_read, free_space, 0);
+        printf("DONE RECVING %d\n", this_read);
+        if (this_read == -1) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            break;
+          } else {
+            error("Error reading from socket");
+          }
+        } else if (this_read == 0) {
+          break;  // Upstream connection closed
+        }
+        n_read += this_read;
+        free_space = buf_len - n_read;
+        if (free_space == 0) {
+          size_t _new_buf_len = buf_len * 2;
+          char* _new_buf = (char*)malloc(_new_buf_len);
+          memcpy(_new_buf, buf, n_read);
+          free(buf);
+          buf = _new_buf;
+          buf_len = _new_buf_len;
+          free_space = buf_len - n_read;
+        }
       }
-      int n_free_bytes = buf_size - m_upstream_in_read;
-      int n_read = read(m_upstream_fd, buf+m_upstream_in_read, n_free_bytes);
       m_upstream_in = buf;
-      m_upstream_in_read += n_read;
-      m_upstream_in_size = buf_size;
-      if (n_read == n_free_bytes) {
-        // The read filled up our buffer. We need to read more.
-        // Remain in this state and return.
-        return;
-      }
+      m_upstream_in_read = n_read;
+      m_upstream_in_size = buf_len;
       
       // Close upstream socket
       close(m_upstream_fd);
@@ -315,6 +337,8 @@ public:
       memcpy(ce.response, m_upstream_in, ce.len);
       if (!ce.response) error("Out of memory!");
       HTTPCache[m_request_checksum] = ce;
+      
+      printf("%s", m_upstream_in);
       
       // Set the data we need to write
       m_client_out = m_upstream_in;

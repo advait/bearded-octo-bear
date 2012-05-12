@@ -143,15 +143,17 @@ int main (int argc, char *argv[]) {
   char* out_buf = (char*)malloc(out_len);
   if (!out_buf) error("Out of memory!");
   while (true) {
+    printf("LOOP\n");
     int remaining = out_len - n_recv;
     int _temp = recv(client_fd, out_buf+n_recv, remaining, 0);
+    printf("DOOP\n");
     n_recv += _temp;
     if (_temp == -1) { 
       error("Could not recv from socket");
-    } else if (_temp < remaining) {
+    } else if (_temp == 0) {
       // Done reading
       break;
-    } else {
+    } else if (n_recv == out_len) {
       // We need to reallocate a buffer twice the size
       int _new_len = out_len*2;
       char* _new_buf = (char*)malloc(_new_len);
@@ -161,6 +163,7 @@ int main (int argc, char *argv[]) {
       out_len = _new_len;
     }
   }
+  printf("%s\n", out_buf);
   
   // Find HTTP data payload (minus headers)
   char* payload = (char*)memmem(out_buf, out_len, "\r\n\r\n", 4);
@@ -168,7 +171,14 @@ int main (int argc, char *argv[]) {
     error("Invalid HTTP Response");
   }
   payload += 4;
-  printf("%s\n", payload);
+  int payload_offset = payload - out_buf;
+  int payload_len = n_recv - payload_offset;
+  
+  // Write output to file
+  FILE *file;
+  file = fopen(filename,"w");
+  fwrite(payload, 1, payload_len, file);
+  fclose(file);
   
   // Free allocated strings
   free(host);
