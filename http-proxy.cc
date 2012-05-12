@@ -159,7 +159,7 @@ public:
       // Read everything from socket
       recvAll(m_client_fd, &m_client_in, &m_client_in_read, &m_client_in_size);
       
-      printf("New Request on fd %d. Length:%d\n\n%s\n", m_client_fd, m_client_in_read, m_client_in);
+//      printf("New Request on fd %d. Length:%d\n\n%s\n", m_client_fd, m_client_in_read, m_client_in);
       
       // Get crc32 checksum
       m_request_checksum = crc32(m_client_in, m_client_in_read);
@@ -167,14 +167,13 @@ public:
       if (it != HTTPCache.end()) {
         // We found our response in our cache! send it!
         printf("Cache hit on client fd %d\n", m_client_fd);
-        printf("Cache length: %d\n", (int)it->second.len);
         m_client_out = (char*)malloc(it->second.len);
         if (!m_client_out) error("Out of memory!");
         memcpy(m_client_out, it->second.response, it->second.len);
         m_client_out_written = 0;
         m_client_out_size = it->second.len;
         m_state = STATE_CLIENT_WRITE;
-        printf("Tebow %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size);
+//        printf("Tebow %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size);
         return;
       }
       
@@ -248,7 +247,7 @@ public:
         error("Error writing to upstream socket");
       }
       m_upstream_out_written += n_written;
-      printf("Wrote %d bytes to upstream fd %d\n", n_written, m_upstream_fd);
+//      printf("Wrote %d bytes to upstream fd %d\n", n_written, m_upstream_fd);
       if (n_written < n_remaining) {
         // Kernel rejected some of our write.
         // We need to wait resend the remaining bytes
@@ -279,7 +278,7 @@ public:
       CacheEntry ce;
       ce.len = m_upstream_in_read;
       ce.response = (char*)malloc(ce.len);
-      printf("Cache length: %d\n", (int)ce.len);
+//      printf("Cache length: %d\n", (int)ce.len);
       if (!ce.response) error("Out of memory!");
       memcpy(ce.response, m_upstream_in, ce.len);
       HTTPCache[m_request_checksum] = ce;
@@ -288,7 +287,7 @@ public:
       m_client_out = m_upstream_in;
       m_client_out_written = 0;
       m_client_out_size = m_upstream_in_read;
-      printf("Brady %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size); 
+//      printf("Brady %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size); 
       m_upstream_in = NULL;
       m_upstream_in_read = 0;
       m_upstream_in_size = 0;
@@ -297,9 +296,9 @@ public:
       m_state = STATE_CLIENT_WRITE;
       
     } else if (this->m_state == STATE_CLIENT_WRITE) {
-      printf("Welker %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size);
+//      printf("Welker %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size);
       if (m_client_out_written > m_client_out_size) {
-        error("How the fuck...");
+        error("The universe just imploded.");
       }
       int n_remaining = m_client_out_size - m_client_out_written;
       int n_written = write(m_client_fd, m_client_out+m_client_out_written, n_remaining);
@@ -310,9 +309,6 @@ public:
       n_remaining = m_client_out_size - m_client_out_written;
       if (n_remaining > 0) {
         return;
-      }
-      if (m_client_out_written < 100) {
-        printf("Data: %s\n", m_client_out);
       }
       printf("Wrote %d bytes to client fd %d\n", m_client_out_written, m_client_fd);
       
@@ -384,11 +380,6 @@ private:
     *out_buf = buf;
     *out_buf_used = n_read;
     *out_buf_len = buf_len;
-    
-    if (*out_buf_used == 0) {
-      printf("OUTBUF\n\n%s\n\n", *out_buf);
-      error("No data read from socket!");
-    }
   }
   
   // Private members
