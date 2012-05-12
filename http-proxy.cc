@@ -159,6 +159,8 @@ public:
       // Read everything from socket
       recvAll(m_client_fd, &m_client_in, &m_client_in_read, &m_client_in_size);
       
+      printf("New Request on fd %d. Length:%d\n\n%s\n", m_client_fd, m_client_in_read, m_client_in);
+      
       // Get crc32 checksum
       m_request_checksum = crc32(m_client_in, m_client_in_read);
       map<int, CacheEntry>::iterator it = HTTPCache.find(m_request_checksum);
@@ -353,11 +355,13 @@ private:
     int buf_len = BUFFER_SIZE;
     int free_space = BUFFER_SIZE;
     char* buf = (char*)malloc(buf_len);
+    memset(buf, buf_len, 0);
     if (!buf) error("Out of memory!");
     while (true) {
       int this_read = recv(sock_fd, buf+n_read, free_space, 0);
       if (this_read == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          n_read = strlen(buf);
           break;
         } else {
           error("Error reading from socket");
@@ -380,6 +384,11 @@ private:
     *out_buf = buf;
     *out_buf_used = n_read;
     *out_buf_len = buf_len;
+    
+    if (*out_buf_used == 0) {
+      printf("OUTBUF\n\n%s\n\n", *out_buf);
+      error("No data read from socket!");
+    }
   }
   
   // Private members
