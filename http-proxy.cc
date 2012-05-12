@@ -164,15 +164,17 @@ public:
       map<int, CacheEntry>::iterator it = HTTPCache.find(m_request_checksum);
       if (it != HTTPCache.end()) {
         // We found our response in our cache! send it!
-        printf("Found cached response! No need for upstream request!\n");
+        printf("Cache hit on client fd %d\n", m_client_fd);
+        printf("Cache length: %d\n", (int)it->second.len);
         m_client_out = (char*)malloc(it->second.len);
         if (!m_client_out) error("Out of memory!");
         memcpy(m_client_out, it->second.response, it->second.len);
+        m_client_out_written = 0;
         m_client_out_size = it->second.len;
         m_state = STATE_CLIENT_WRITE;
+        printf("Tebow %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size);
         return;
       }
-      printf("Checksum: %d\n", m_request_checksum);
       
       // Done reading. Parse http request
       HttpRequest req_in;
@@ -199,9 +201,8 @@ public:
         return;
       }
       
-      cout << "Host: " << req_in.GetHost() << endl;
-      cout << "Port: " << req_in.GetPort() << endl;
-      cout << "Path: " << req_in.GetPath() << endl;
+      printf("New request: %s:%d%s on fd %d\n", req_in.GetHost().c_str(), 
+             req_in.GetPort(), req_in.GetPath().c_str(), m_client_fd);
       
       // Set connection close header
       req_in.ModifyHeader("Conection", "close");
@@ -241,6 +242,9 @@ public:
       // Write to upstream socket
       int n_remaining = m_upstream_out_size - m_upstream_out_written;
       int n_written = write(m_upstream_fd, m_upstream_out+m_upstream_out_written, n_remaining);
+      if (n_written < 0) {
+        error("Error writing to upstream socket");
+      }
       m_upstream_out_written += n_written;
       printf("Wrote %d bytes to upstream fd %d\n", n_written, m_upstream_fd);
       if (n_written < n_remaining) {
@@ -273,15 +277,16 @@ public:
       CacheEntry ce;
       ce.len = m_upstream_in_read;
       ce.response = (char*)malloc(ce.len);
-      memcpy(ce.response, m_upstream_in, ce.len);
+      printf("Cache length: %d\n", (int)ce.len);
       if (!ce.response) error("Out of memory!");
+      memcpy(ce.response, m_upstream_in, ce.len);
       HTTPCache[m_request_checksum] = ce;
-      
-      printf("%s", m_upstream_in);
       
       // Set the data we need to write
       m_client_out = m_upstream_in;
+      m_client_out_written = 0;
       m_client_out_size = m_upstream_in_read;
+      printf("Brady %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size); 
       m_upstream_in = NULL;
       m_upstream_in_read = 0;
       m_upstream_in_size = 0;
@@ -290,16 +295,24 @@ public:
       m_state = STATE_CLIENT_WRITE;
       
     } else if (this->m_state == STATE_CLIENT_WRITE) {
-      // Write to downstream client
+      printf("Welker %d %d/%d\n", m_client_fd, m_client_out_written, m_client_out_size);
+      if (m_client_out_written > m_client_out_size) {
+        error("How the fuck...");
+      }
       int n_remaining = m_client_out_size - m_client_out_written;
       int n_written = write(m_client_fd, m_client_out+m_client_out_written, n_remaining);
+      if (n_written < 0) {
+        error("Could not write to client socket");
+      }
       m_client_out_written += n_written;
-      printf("Wrote %d bytes to client fd %d\n", n_written, m_client_fd);
-      if (n_written < n_remaining) {
-        // Kernel rejected some of our write.
-        // We need to wait resend the remaining bytes
+      n_remaining = m_client_out_size - m_client_out_written;
+      if (n_remaining > 0) {
         return;
       }
+      if (m_client_out_written < 100) {
+        printf("Data: %s\n", m_client_out);
+      }
+      printf("Wrote %d bytes to client fd %d\n", m_client_out_written, m_client_fd);
       
       // Free client out downstream buffer
       free(m_client_out);
@@ -390,7 +403,7 @@ private:
 
 
 // Sets the socket fd to non-blocking mode where all calls to read and write
-// return immediately. This function is redundant as we're using polling anyways!
+// return immediately.
 int setNonblocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags == -1) flags = 0;
@@ -425,6 +438,7 @@ int main (int argc, char *argv[]) {
   }
 }
 
+
 // This function runs repeatedly
 // It is responsible for determining which sockets to poll on and
 // dispatching events to their appropriate ProxyState->advanceState() handler
@@ -436,7 +450,7 @@ inline void eventLoop(int server_fd) {
   struct pollfd server_poll_fd;
   server_poll_fd.fd = server_fd;
   server_poll_fd.events = 0 | POLLIN;  // Unblock when socket is readable
-  printf("Polling on fd %d (server)\n", server_fd);
+//  printf("Polling on fd %d (server)\n", server_fd);
   poll_fds.push_back(server_poll_fd);
   
   // Which auxilary sockets do we need to poll on?
@@ -450,30 +464,30 @@ inline void eventLoop(int server_fd) {
       pfd.fd = ps->getClientFd();
       pfd.events = 0 | POLLIN;
       poll_fds.push_back(pfd);
-      printf("Polling on fd %d (client read)\n", pfd.fd);
+//      printf("Polling on fd %d (client read)\n", pfd.fd);
     } else if (current_state == STATE_UPSTREAM_WRITE) { 
       // Waiting to write to upstream socket
       pollfd pfd;
       pfd.fd = ps->getUpstreamFd();
       pfd.events = 0 | POLLOUT;
-      printf("Polling on fd %d (upstream write)\n", pfd.fd);
+//      printf("Polling on fd %d (upstream write)\n", pfd.fd);
       poll_fds.push_back(pfd);
     } else if (current_state == STATE_UPSTREAM_READ) {
       // Waiting to read from upstream socket
       pollfd pfd;
       pfd.fd = ps->getUpstreamFd();
       pfd.events = 0 | POLLIN;
-      printf("Polling on fd %d (upstream read)\n", pfd.fd);
+//      printf("Polling on fd %d (upstream read)\n", pfd.fd);
       poll_fds.push_back(pfd);
     } else if (current_state == STATE_CLIENT_WRITE) {
       // Waiting to write to client socket
       pollfd pfd;
       pfd.fd = ps->getClientFd();
       pfd.events = 0 | POLLOUT;
-      printf("Polling on fd %d (client write)\n", pfd.fd);
+//      printf("Polling on fd %d (client write)\n", pfd.fd);
       poll_fds.push_back(pfd);
     } else {
-      perror("Invalid Proxy state!");
+      error("Invalid Proxy state!");
     }
     
   }
@@ -483,12 +497,12 @@ inline void eventLoop(int server_fd) {
   if (rv < 0) {
     error("Unable to poll on socket");
   } else if (rv > 0) {
-    printf("%d events occurred!\n", rv);
+    //printf("%d events occurred!\n", rv);
     for (vector<pollfd>::iterator it = poll_fds.begin(); it < poll_fds.end(); it++) {
       if (it->fd == server_fd) {
         // Handle events on the server socket
         if (it->revents & POLLIN) {
-          printf("Accepting connection from server_fd\n");
+          //printf("Accepting connection from server_fd\n");
           acceptConnection(server_fd);
         } else if (it->revents & POLLERR || 
                    it->revents & POLLHUP ||
@@ -497,9 +511,23 @@ inline void eventLoop(int server_fd) {
         }
       } else {
         // Hanlde events on auxilary sockets
-        if (it->revents & POLLIN || it->revents & POLLOUT) {
-          // Handle regular fd connection
-          FDMap[it->fd]->advanceState();
+        ProxyState* ps = FDMap[it->fd];
+        int state = ps->getState();
+        
+//        STATE_DEFAULT = -1,       // Newly accepted connection
+//        STATE_CLIENT_READ = 0,    // Waiting to read initial request
+//        STATE_UPSTREAM_WRITE = 1, // Waiting to write upstream request
+//        STATE_UPSTREAM_READ = 2,  // Waiting to read upstream request
+//        STATE_CLIENT_WRITE = 3,   // Waiting to write to downstream client
+        
+        if (it->revents & POLLIN) {
+          if (state == STATE_CLIENT_READ || state == STATE_UPSTREAM_READ) {
+            ps->advanceState();
+          }
+        } else if (it->revents & POLLOUT) {
+          if (state == STATE_CLIENT_WRITE || state == STATE_UPSTREAM_WRITE) {
+            ps->advanceState();
+          }
         } else if (it->revents & POLLERR ||
                    it->revents & POLLHUP ||
                    it->revents & POLLNVAL) {
